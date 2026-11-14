@@ -7,6 +7,26 @@ from qgis.PyQt.QtWidgets import QAction
 from .ui.dock import AgentDock
 
 
+DOCK_AREA_KEY = "mapsuke/dock_area"
+DOCK_AREAS = (Qt.DockWidgetArea.LeftDockWidgetArea, Qt.DockWidgetArea.RightDockWidgetArea,
+              Qt.DockWidgetArea.TopDockWidgetArea, Qt.DockWidgetArea.BottomDockWidgetArea)
+DOCK_WIDTH = 420
+
+
+def area_code(area):
+    # Qt 5 enums are ints; Qt 6 enums are Python enums with a value.
+    return int(getattr(area, "value", area))
+
+
+def saved_dock_area():
+    """The area the user moved the dock to, or None if they never did."""
+    value = QSettings().value(DOCK_AREA_KEY, None)
+    for area in DOCK_AREAS:
+        if str(value) == str(area_code(area)):
+            return area
+    return None
+
+
 class MapsukePlugin:
     def __init__(self, iface, session_path=None):
         self.iface = iface
@@ -33,13 +53,36 @@ class MapsukePlugin:
     def show(self):
         if self.dock is None:
             self.dock = AgentDock(self.iface, self.session_path)
-            self.iface.addTabifiedDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock,
-                                             ["LayerStyling", "ProcessingToolbox"], True)
+            self.place_dock()
             self.dock.toggleViewAction().toggled.connect(self.remember_dock_open)
+            # Connected after the first placement, so only the user's own moves are remembered.
+            self.dock.dockLocationChanged.connect(self.remember_dock_area)
         self.dock.show()
         self.dock.raise_()
         # The toggle signal needs a visible main window, which startup does not have yet.
         self.remember_dock_open(True)
+
+    def place_dock(self):
+        """Open at the right, tabbed with the side panels, unless the user placed it elsewhere.
+
+        Tabbing joins the area of the panel it targets, and a stale saved layout can leave that
+        panel in a top or bottom strip, where the dock would be a thin bar over the menu bar.
+        """
+        window = self.iface.mainWindow()
+        right = Qt.DockWidgetArea.RightDockWidgetArea
+        chosen = saved_dock_area()
+        if chosen is not None and chosen != right:
+            self.iface.addDockWidget(chosen, self.dock)
+            return
+        self.iface.addTabifiedDockWidget(right, self.dock, ["LayerStyling", "ProcessingToolbox"], True)
+        if window.dockWidgetArea(self.dock) != right:
+            # Tabbing pulled it out of the right side; dock it there on its own.
+            self.iface.addDockWidget(right, self.dock)
+            window.resizeDocks([self.dock], [DOCK_WIDTH], Qt.Orientation.Horizontal)
+
+    def remember_dock_area(self, area):
+        if area in DOCK_AREAS:
+            QSettings().setValue(DOCK_AREA_KEY, area_code(area))
 
     def remember_dock_open(self, visible):
         QSettings().setValue("mapsuke/dock_open", visible)

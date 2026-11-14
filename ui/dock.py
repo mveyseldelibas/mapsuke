@@ -20,6 +20,8 @@ class AgentDock(QDockWidget):
     def __init__(self, iface, session_path=None):
         super().__init__("Mapsuke", iface.mainWindow())
         self.setObjectName("MapsukeDock")
+        # A top or bottom area would otherwise shrink the chat to a strip under the menu bar.
+        self.setMinimumSize(QSize(280, 240))
         self.session = session = AgentSession(self, iface, session_path)
         session.message_added.connect(self.on_message_added)
         session.message_changed.connect(self.on_message_changed)
