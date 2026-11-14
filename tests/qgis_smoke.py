@@ -431,7 +431,7 @@ import json, sys
 p = json.load(sys.stdin)
 answers = [x["content"] for x in p["conversation"] if x["role"] == "user"]
 base = {"code": "", "title": "", "requires_approval": False, "approval_reason": "", "question": "", "choices": []}
-if answers[-1] == "Both":
+if not answers or answers[-1] == "Both":
     out = dict(base, message="x", code="raise AssertionError('must not run')", question="どれ？")
 elif answers[-1] in ("道路（2024）", "自由回答", "ツールとして保存") or answers[-1].endswith("picked.gpkg"):
     out = dict(base, message="回答: " + answers[-1])
@@ -522,6 +522,36 @@ print(json.dumps({"subtype": "success", "structured_output": out}, ensure_ascii=
     dock.submit()
     wait_until(lambda: not dock.session.running)
     assert "codeを空に" in dock.transcript.toPlainText() and dock.session.pending_code is None
+    # The invalid reply was sent back once; the second invalid reply ended the turn.
+    assert sum(1 for m in dock.session.messages if m["role"] == tr("Response format error")) == 1
+    assert dock.session.messages[-1]["role"] == tr("Error / stopped")
+    dock.input.clear()
+    # A format slip (code together with a suggestion) is sent back once instead of ending the turn.
+    # The rejected code never runs, even in Full auto.
+    fake.write_text('''#!/usr/bin/env python3
+import json, sys
+p = json.load(sys.stdin)
+base = {"code": "", "title": "", "requires_approval": False, "approval_reason": "", "question": "", "choices": []}
+fixed = any(isinstance(x["content"], dict) and "response_format_error" in x["content"] for x in p["conversation"])
+if fixed:
+    out = dict(base, message="修正しました")
+else:
+    out = dict(base, message="x", code="raise AssertionError('must not run')", suggestion="ツールとして保存")
+print(json.dumps({"subtype": "success", "structured_output": out}, ensure_ascii=False))
+''')
+    dock.session.new_chat()
+    dock.session.options["approval_mode"] = "full_auto"
+    dock.input.setPlainText("Slip")
+    dock.submit()
+    wait_until(lambda: not dock.session.running)
+    assert dock.transcript.messages[-1].message.text() == "修正しました", dock.transcript.toPlainText()
+    assert "応答形式エラー" in dock.transcript.toPlainText()
+    errors = [x["content"] for x in dock.session.history
+              if x["role"] == "bridge" and isinstance(x["content"], dict) and "response_format_error" in x["content"]]
+    assert len(errors) == 1 and "suggestion" in errors[0]["response_format_error"]
+    assert not any(x["role"] == "bridge" and isinstance(x["content"], dict) and "ok" in x["content"]
+                   for x in dock.session.history), "rejected code must not run"
+    dock.session.options["approval_mode"] = "ask"
     dock.input.clear()
     fake.write_text("#!/bin/sh\nsleep 30\n")
     dock.session.options["executable"] = str(fake)

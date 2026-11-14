@@ -80,6 +80,7 @@ class AgentSession(QObject):
         self.agent.completed.connect(self.on_response)
         self.agent.usage_updated.connect(self.on_usage_updated)
         self.agent.failed.connect(self.on_failure)
+        self.agent.invalid_response.connect(self.on_invalid_response)
         self.agent.progress.connect(self.on_progress)
         self.agent.login_required.connect(self.on_login_required)
         settings = QSettings()
@@ -133,6 +134,8 @@ class AgentSession(QObject):
         self.jobs = []
         self.queued = []
         self.running = False
+        # One correction request per invalid reply; a valid reply or the end of the turn resets it.
+        self.repair_attempted = False
         self.continuation = QTimer(self)
         self.continuation.setSingleShot(True)
         self.continuation.timeout.connect(self.request)
@@ -170,6 +173,7 @@ class AgentSession(QObject):
     def set_running(self, busy):
         self.running = busy
         if not busy:
+            self.repair_attempted = False
             self.waiting_changed.emit(False)
         self.busy_changed.emit(busy)
 
@@ -410,6 +414,7 @@ class AgentSession(QObject):
         if not self.running:
             return
         self.waiting_changed.emit(False)
+        self.repair_attempted = False
         if not self.agent_started:
             self.on_session_opened(self.session_id)
         if not self.session_title and not any(item["role"] == "assistant" for item in self.history):
@@ -506,6 +511,33 @@ class AgentSession(QObject):
     def continue_after_execution(self):
         self.set_status(self.agent_label + tr(" is receiving execution results…"))
         # Yield to Qt so the canvas refresh and stop requests can be processed.
+        if self.save():
+            self.continuation.start(0)
+        else:
+            self.on_failure(tr("Stopped because execution results could not be saved"))
+
+    def on_invalid_response(self, error):
+        """Ask once, in the same session, for a corrected reply; nothing from the bad one runs."""
+        if not self.running:
+            return
+        if self.repair_attempted:
+            self.on_failure(error)
+            return
+        self.repair_attempted = True
+        self.waiting_changed.emit(False)
+        if not self.agent_started:
+            self.on_session_opened(self.session_id)
+        self.pending_code = None
+        self.mark_interrupted()
+        self.history.append({"role": "bridge", "content": {
+            "response_format_error": error,
+            "instruction": "Your previous reply was rejected and nothing was run. Reply again with one "
+                           "response that follows the response schema and the rules for its fields."}})
+        self.log(tr("Response format error"), error + tr("\nAsking the agent to correct its reply. Nothing from the rejected reply was run."))
+        self.set_status(self.agent_label + tr(" is correcting its reply…"))
+        self.schedule_request()
+
+    def schedule_request(self):
         if self.save():
             self.continuation.start(0)
         else:

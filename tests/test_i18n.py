@@ -72,6 +72,13 @@ class TranslationTests(unittest.TestCase):
             self.assertIn(tr_[button], hint)
         self.assertIn('onay', tr_['In Full auto mode, generated Python code runs without prior confirmation.'])
 
+    def test_persisted_role_labels_are_translated(self):
+        for label in ('You', 'Error', 'Confirm execution', 'Run succeeded', 'Run error', 'Error / stopped',
+                      'Save error', 'Load error', 'Response interrupted (not run)', 'Response format error'):
+            for prefix, table in i18n.LANGUAGES.items():
+                with self.subTest(language=prefix, label=label):
+                    self.assertTrue(table.get(label))
+
 
 if __name__ == '__main__':
     unittest.main()

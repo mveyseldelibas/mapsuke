@@ -210,6 +210,32 @@ class ProtocolTests(unittest.TestCase):
         no_question = dict(result, question="", choices=[], code="print(1)")
         self.assertEqual(parse_response(json.dumps({"structured_output": no_question})), no_question)
 
+    def test_format_slips_are_invalid_responses_and_never_reach_the_caller_as_responses(self):
+        from mapsuke.core.protocol import InvalidResponse
+        base = {"message": "Downloaded", "code": "", "title": "", "requires_approval": False,
+                "approval_reason": "", "question": "", "choices": [], "path_request": "",
+                "path_suggestion": "", "suggestion": ""}
+        slips = ({"code": "print(1)", "suggestion": "Save as a tool"}, {"unexpected": "x"},
+                 {"question": "Which?", "code": "print(1)"}, {"choices": ["A"]}, {"title": 3})
+        for patch in slips:
+            with self.subTest(patch=patch), self.assertRaises(InvalidResponse):
+                parse_response(json.dumps({"structured_output": dict(base, **patch)}))
+        with self.assertRaises(InvalidResponse):
+            parse_response(json.dumps({"subtype": "success", "result": "Plain text, not JSON"}))
+        with self.assertRaises(InvalidResponse):
+            parse_response(json.dumps({"structured_output": ["not", "an", "object"]}))
+        # An invalid response is still a ValueError, so existing handlers keep working.
+        self.assertTrue(issubclass(InvalidResponse, ValueError))
+
+    def test_envelope_and_cli_errors_are_not_invalid_responses(self):
+        from mapsuke.core.protocol import InvalidResponse
+        for raw in (json.dumps({"is_error": True, "result": "Not logged in"}),
+                    json.dumps({"subtype": "error_max_turns"}), json.dumps([]), "not json"):
+            with self.subTest(raw=raw):
+                with self.assertRaises(ValueError) as caught:
+                    parse_response(raw)
+                self.assertNotIsInstance(caught.exception, InvalidResponse)
+
     def test_path_request_opens_a_picker_only_with_a_question(self):
         from mapsuke.core.protocol import SCHEMA
         self.assertTrue({"path_request", "path_suggestion"} <= set(SCHEMA["required"]))
